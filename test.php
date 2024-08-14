@@ -73,14 +73,25 @@ function extractData($html, $queries) {
     return array_unique(array_filter($data));
 }
 
+// Get the URL from the query parameter
+if (!isset($_GET['check']) || empty($_GET['check'])) {
+    echo '<pre>Error: No URL provided in query parameter.</pre>';
+    exit;
+}
+
+$initialUrl = filter_var($_GET['check'], FILTER_VALIDATE_URL);
+if ($initialUrl === false) {
+    echo '<pre>Error: Invalid URL provided in query parameter.</pre>';
+    exit;
+}
+
+$parsedUrl = parse_url($initialUrl);
+$baseUrl = $parsedUrl['scheme'] . '://' . $parsedUrl['host'];
+
 // Main workflow
 $start_time = microtime(true);
 
 try {
-    $initialUrl = "https://vipes.com.sg/product-category/office-stationery/writing-materials/";
-    $parsedUrl = parse_url($initialUrl);
-    $baseUrl = $parsedUrl['scheme'] . '://' . $parsedUrl['host'];
-
     // Fetch initial page
     $ch = initCurl($initialUrl);
     $html = executeCurl($ch);
