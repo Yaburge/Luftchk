@@ -29,146 +29,213 @@ function executeCurl($ch) {
     return $response;
 }
 
-// Function to check for CAPTCHA presence
-function detectCaptcha($html) {
-    $captchaIndicators = [
-        '//iframe[contains(@src, "recaptcha")]',
-        '//div[contains(@class, "g-recaptcha")]',
-        '//div[contains(@class, "h-captcha")]',
-        '//script[contains(@src, "recaptcha")]',
-        '//script[contains(@src, "hcaptcha")]',
-        '//noscript[contains(text(), "captcha")]'
-    ];
+// Function to extract product IDs using DOMDocument and XPath
+function extractProductIDs($html) {
     $dom = new DOMDocument();
     @$dom->loadHTML($html);
     $xpath = new DOMXPath($dom);
-    foreach ($captchaIndicators as $indicator) {
-        if ($xpath->query($indicator)->length > 0) {
-            return true;
-        }
-    }
-    return false;
-}
 
-// Function to extract data using XPath
-function extractData($html, $queries) {
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
-    $xpath = new DOMXPath($dom);
-    $data = [];
-    foreach ($queries as $query) {
-        foreach ($xpath->query($query) as $node) {
-            if ($query === '//script[@type="application/ld+json"]') {
-                $json = json_decode(trim($node->textContent), true);
-                if (isset($json['@type']) && $json['@type'] === 'Product' && isset($json['sku'])) {
-                    $data[] = $json['sku'];
-                }
-            } elseif (preg_match('/add-to-cart=(\d+)/', $node->nodeValue, $matches)) {
-                $data[] = $matches[1];
-            } else {
-                $data[] = $node->nodeValue;
-            }
-        }
-    }
-    return array_unique(array_filter($data));
-}
+    $productIDs = [];
 
-// Get the URL from the query parameter
-if (!isset($_GET['check']) || empty($_GET['check'])) {
-    echo '<pre>Error: No URL provided in query parameter.</pre>';
-    exit;
-}
-
-$initialUrl = filter_var($_GET['check'], FILTER_VALIDATE_URL);
-if ($initialUrl === false) {
-    echo '<pre>Error: Invalid URL provided in query parameter.</pre>';
-    exit;
-}
-
-$parsedUrl = parse_url($initialUrl);
-$baseUrl = $parsedUrl['scheme'] . '://' . $parsedUrl['host'];
-
-// Main workflow
-$start_time = microtime(true);
-
-try {
-    // Fetch initial page
-    $ch = initCurl($initialUrl);
-    $html = executeCurl($ch);
-    curl_close($ch);
-
-    // Detect CAPTCHA on initial page
-    $captchaStart = microtime(true);
-    $captchaDetected = detectCaptcha($html);
-    $captchaEnd = microtime(true);
-
-    echo '<pre>', $captchaDetected ? 'Captcha Detected on Product Page.' : 'No Captcha on Product Page.', '</pre>';
-
-    // Extract product IDs
-    $productQueries = [
+    $queries = [
         '//a[contains(@href, "add-to-cart=")]/@href',
         '//input[@name="add-to-cart" or @name="product_id"]/@value',
         '//*[@data-product_id or @data-product-id]/@data-product_id | //*[@data-product_id or @data-product-id]/@data-product-id',
         '//form[contains(@action, "add-to-cart=")]/@action',
         '//script[@type="application/ld+json"]'
     ];
-    $productIDsStart = microtime(true);
-    $productIDs = extractData($html, $productQueries);
-    $productIDsEnd = microtime(true);
-    echo '<pre>Product IDs: ', print_r($productIDs, true), '</pre>';
 
-    if (!empty($productIDs)) {
-        $productID = reset($productIDs);
-
-        // Add product to cart
-        $addToCartStart = microtime(true);
-        $ch = initCurl("$baseUrl/?wc-ajax=add_to_cart", ['product_id' => $productID, 'quantity' => 1], true);
-        $response = executeCurl($ch);
-        curl_close($ch);
-        $addToCartEnd = microtime(true);
-
-        echo '<pre>', $response !== false ? 'Product added to cart successfully.' : 'Failed to add product to cart.', '</pre>';
-
-        if ($response !== false) {
-            // Fetch checkout page
-            $checkoutPageStart = microtime(true);
-            $checkoutUrl = $baseUrl . "/checkout/";
-            $ch = initCurl($checkoutUrl);
-            $checkoutPage = executeCurl($ch);
-            curl_close($ch);
-            $checkoutPageEnd = microtime(true);
-
-            if ($checkoutPage === false) {
-                echo '<pre>Failed to load checkout page.</pre>';
+    foreach ($queries as $query) {
+        foreach ($xpath->query($query) as $node) {
+            if ($query === '//script[@type="application/ld+json"]') {
+                $data = json_decode(trim($node->textContent), true);
+                if (isset($data['@type']) && $data['@type'] === 'Product' && isset($data['sku'])) {
+                    $productIDs[] = $data['sku'];
+                }
+            } elseif (preg_match('/add-to-cart=(\d+)/', $node->nodeValue, $matches)) {
+                $productIDs[] = $matches[1];
             } else {
-                // Detect CAPTCHA on checkout page
-                $checkoutCaptchaStart = microtime(true);
-                $checkoutCaptchaDetected = detectCaptcha($checkoutPage);
-                $checkoutCaptchaEnd = microtime(true);
-                echo '<pre>', $checkoutCaptchaDetected ? 'Captcha Detected on Checkout Page.' : 'No Captcha on Checkout Page.', '</pre>';
-
-                // Extract payment methods
-                $paymentMethodsStart = microtime(true);
-                $paymentMethods = extractData($checkoutPage, ['//*[@id="payment"]//input[@name="payment_method"]/@value']);
-                $paymentMethodsEnd = microtime(true);
-                echo '<pre>Payment Methods: ', print_r($paymentMethods, true), '</pre>';
+                $productIDs[] = trim($node->nodeValue);
             }
         }
-    } else {
-        echo '<pre>No product IDs found.</pre>';
     }
 
-    // Calculate total execution time
-    $end_time = microtime(true);
-    echo 'Execution time: ', round($end_time - $start_time, 4), " seconds\n";
-    echo 'Captcha check time: ', round($captchaEnd - $captchaStart, 4), " seconds\n";
-    echo 'Product ID extraction time: ', round($productIDsEnd - $productIDsStart, 4), " seconds\n";
-    echo 'Add to cart time: ', round($addToCartEnd - $addToCartStart, 4), " seconds\n";
-    echo 'Checkout page fetch time: ', round($checkoutPageEnd - $checkoutPageStart, 4), " seconds\n";
-    echo 'Checkout CAPTCHA check time: ', round($checkoutCaptchaEnd - $checkoutCaptchaStart, 4), " seconds\n";
-    echo 'Payment methods extraction time: ', round($paymentMethodsEnd - $paymentMethodsStart, 4), " seconds\n";
-
-} catch (Exception $e) {
-    echo '<pre>Error: ', $e->getMessage(), '</pre>';
+    return array_unique(array_filter($productIDs));
 }
+
+// Function to extract payment methods from the checkout page
+function extractPaymentMethods($html) {
+    $dom = new DOMDocument();
+    @$dom->loadHTML($html);
+    $xpath = new DOMXPath($dom);
+
+    $queries = [
+        '//*[@id="payment"]//ul[contains(@class, "wc_payment_methods")]//input[@type="radio"]/@value',
+        '//*[@id="payment"]//input[@type="radio" and @name="payment_method"]/@value',
+        '//*[contains(@id, "payment")]//input[@type="radio" and @name="payment_method"]/@value',
+        '//input[@type="radio" and @name="payment_method"]/@value',
+        
+        '//*[@id="payment"]//input[contains(@name, "payment") and @type="radio"]/@value',
+        '//*[contains(@id, "payment")]//input[contains(@name, "payment") and @type="radio"]/@value',
+        '//input[contains(@name, "payment") and @type="radio"]/@value',
+        '//*[contains(@id, "payment")]//input[contains(@name, "method") and @type="radio"]/@value',
+        
+        '//*[contains(@class, "wc_payment_methods")]//input[@type="radio" and contains(@name, "payment")]/@value',
+        '//*[@id="payment"]//div[contains(@class, "payment_method")]//input[@type="radio"]/@value',
+        '//*[contains(@class, "woocommerce-checkout-payment")]//input[@type="radio" and @name]/@value',
+        '//*[contains(@class, "woocommerce-payment-methods")]//input[@type="radio" and @name]/@value',
+        
+        '//input[@type="radio" and contains(@id, "payment_method")]/@value',
+        '//input[@type="radio" and contains(@name, "payment")]/@value',
+        '//input[@type="radio" and contains(@name, "method")]/@value',
+        '//input[@type="radio" and contains(@class, "payment")]/@value',
+        '//input[@type="radio" and contains(@class, "method")]/@value'
+    ];
+
+    $methods = [];
+    foreach ($queries as $query) {
+        foreach ($xpath->query($query) as $method) {
+            $value = trim($method->nodeValue);
+            if ($value && !in_array($value, ['new', 'true'])) {
+                $methods[] = $value;
+            }
+        }
+    }
+
+    return array_values(array_unique($methods));
+}
+
+// Function to detect CAPTCHA on a webpage
+function detectCaptcha($html) {
+    $dom = new DOMDocument();
+    @$dom->loadHTML($html);
+    $xpath = new DOMXPath($dom);
+
+    $captchaIndicators = [
+        '//iframe[contains(@src, "recaptcha")]',
+        '//div[contains(@class, "g-recaptcha")]',
+        '//div[contains(@class, "h-captcha")]',
+        '//script[contains(@src, "recaptcha")]',
+        '//script[contains(@src, "hcaptcha")]',
+        '//noscript[contains(text(), "captcha")]',
+        '//input[@name="g-recaptcha-response"]',
+        '//input[@name="h-captcha-response"]',
+        '//div[@id="px-captcha"]',
+        '//div[contains(@class, "captcha")]',
+        '//input[contains(@id, "captcha")]',
+        '//div[contains(@class, "cf-captcha-container")]',
+        '//input[@type="hidden" and @name="cf-turnstile-response"]',
+        '//input[@type="hidden" and @name="captcha"]',
+    ];
+
+    foreach ($captchaIndicators as $indicator) {
+        if ($xpath->query($indicator)->length > 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Function to add a product to the cart by sending a POST request
+function addProductToCart($initialUrl, $fullUrl, $productID) {
+    // AJAX request URL
+    $ajaxUrl = "$fullUrl/?wc-ajax=add_to_cart";
+    $postData = ['product_id' => $productID, 'quantity' => 1];
+
+    // Initialize cURL for AJAX request
+    $ch = initCurl($ajaxUrl, $postData, true);
+    $response = executeCurl($ch);
+    curl_close($ch);
+
+    // Fallback to standard request if AJAX fails
+    if ($response === false || strpos($response, 'cart') === false) {
+        $standardUrl = "$initialUrl/?add-to-cart=$productID";
+        $postData = ['add-to-cart' => $productID];
+
+        // Initialize cURL for standard request
+        $ch = initCurl($standardUrl, $postData, true);
+        $response = executeCurl($ch);
+        curl_close($ch);
+    }
+
+    return $response;
+}
+
+// Access the checkout page to scrape payment methods
+function getCheckoutPage($checkoutUrl) {
+    $ch = initCurl($checkoutUrl);
+    $html = executeCurl($ch);
+    curl_close($ch);
+
+    if ($html === false) {
+        return false;
+    }
+
+    return $html;
+}
+
+// Main workflow
+$checkUrl = isset($_GET['check']) ? $_GET['check'] : die('No check URL provided');
+$parsedUrl = parse_url($checkUrl);
+$fullUrl = $parsedUrl['scheme'] . '://' . $parsedUrl['host'];
+$initialUrl = rtrim($checkUrl, '/');
+
+$ch = initCurl($checkUrl);
+$html = executeCurl($ch);
+curl_close($ch);
+
+$response = [];
+
+$response['captcha'] = detectCaptcha($html) ? 'yes' : 'no';
+
+$productIDs = extractProductIDs($html);
+$response['productid'] = $productIDs;
+
+if (empty($productIDs)) {
+    $pagesToTry = [
+        "$fullUrl/shop/", "$fullUrl/product-category/", "$fullUrl/category/", "$fullUrl/products/",
+        "$fullUrl/store/", "$fullUrl/collections/", "$fullUrl/items/", "$fullUrl/catalog/",
+        "$fullUrl/products-page/", "$fullUrl/product/", "$fullUrl/our-products/", "$fullUrl/shop-all/",
+        "$fullUrl/shop-by-category/", "$fullUrl/all-products/", "$fullUrl/product-list/", "$fullUrl/sale/",
+        "$fullUrl/new-arrivals/", "$fullUrl/top-rated/", "$fullUrl/best-sellers/", "$fullUrl/featured/",
+        "$fullUrl/brands/", "$fullUrl/vendors/", "$fullUrl/promotions/", "$fullUrl/deals/",
+        "$fullUrl/discounts/", "$fullUrl/offers/", "$fullUrl/collections/all/", "$fullUrl/our-range/",
+        "$fullUrl/exclusive/", "$fullUrl/seasonal/", "$fullUrl/limited-edition/", "$fullUrl/special-edition/",
+        "$fullUrl/catalogue/", "$fullUrl/shop-now/", "$fullUrl/shop-by-brand/", "$fullUrl/shop-by-type/",
+        "$fullUrl/shop-by-price/", "$fullUrl/clearance/", "$fullUrl/outlet/", "$fullUrl/promo-items/"
+    ];
+
+    foreach ($pagesToTry as $pageUrl) {
+        $ch = initCurl($pageUrl);
+        $html = executeCurl($ch);
+        curl_close($ch);
+
+        $productIDs = extractProductIDs($html);
+        if (!empty($productIDs)) {
+            $response['productid'] = $productIDs;
+            break;
+        }
+    }
+}
+
+if (!empty($productIDs)) {
+    $productID = reset($productIDs);
+    $cartResponse = addProductToCart($initialUrl, $fullUrl, $productID);
+
+    if ($cartResponse !== false) {
+        $checkoutUrl = "$fullUrl/checkout/";
+        $checkoutPage = getCheckoutPage($checkoutUrl);
+
+        if ($checkoutPage !== false) {
+            $response['captcha'] = detectCaptcha($checkoutPage) ? 'yes' : 'no';
+            $paymentMethods = extractPaymentMethods($checkoutPage);
+            $response['paymentmethod'] = $paymentMethods;
+        }
+    }
+}
+
+// Output the response as JSON
+header('Content-Type: application/json');
+echo json_encode($response);
 ?>
