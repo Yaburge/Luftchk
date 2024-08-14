@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Processor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        form {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 800px;
+            box-sizing: border-box;
+        }
+        label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        button {
+            display: inline-block;
+            padding: 10px 20px;
+            font-size: 16px;
+            color: #fff;
+            background-color: #007BFF;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #results {
+            margin-top: 20px;
+            width: 80%;
+            max-width: 800px;
+            box-sizing: border-box;
+        }
+        .result {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            background-color: #fff;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+        }
+        .processing {
+            color: #007BFF;
+        }
+        .completed {
+            color: #28a745;
+        }
+        .failed {
+            color: #dc3545;
+        }
+        .payment-methods {
+            background-color: #e7f0ff;
+        }
+        .captcha {
+            background-color: #ffe7e7;
+        }
+        .no-product-id {
+            background-color: #f7d7d7;
+        }
+    </style>
+</head>
+<body>
+    <h1>URL Processor</h1>
+    <form id="urlForm">
+        <label for="urls">Enter URLs (one per line):</label>
+        <textarea id="urls" name="urls" placeholder="Paste your URLs here..."></textarea>
+        <button type="button" onclick="processUrls()">Process URLs</button>
+    </form>
+    <div id="results"></div>
+
+    <script>
+        async function processUrls() {
+            const textarea = document.getElementById('urls');
+            let urls = textarea.value.split('\n').map(url => url.trim()).filter(url => url.length > 0);
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';  // Clear previous results
+
+            const timeout = 20000; // 40 seconds timeout
+            const results = [];
+
+            function fetchWithTimeout(url, timeout) {
+                return Promise.race([
+                    fetch('api.php', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ url: url })
+                    }).then(response => response.json()),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Timeout')), timeout)
+                    )
+                ]);
+            }
+
+            async function processUrl(url) {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'result processing';
+                resultDiv.id = 'result-' + url;
+                resultDiv.innerText = `Checking: ${url}`;
+                resultsDiv.appendChild(resultDiv);
+
+                try {
+                    const data = await fetchWithTimeout(url, timeout);
+                    let resultClass = '';
+                    let resultText = '';
+
+                    if (data.status === 'error') {
+                        resultClass = 'failed';
+                        resultText = `Failed to process ${url}: ${data.message}`;
+                    } else if (data.status === 'no_product_id') {
+                        resultClass = 'no-product-id';
+                        resultText = `No product ID found for ${url}. CAPTCHA status: ${data.captcha}`;
+                    } else {
+                        resultClass = 'completed';
+                        resultText = `${url} PM: ${data.paymentMethods}. CAPTCHA: ${data.captcha}`;
+                        if (data.captcha === 'YES') {
+                            resultDiv.classList.add('captcha');
+                        } else {
+                            resultDiv.classList.add('payment-methods');
+                        }
+                    }
+
+                    resultDiv.className = 'result ' + resultClass;
+                    resultDiv.innerHTML = resultText;
+                } catch (error) {
+                    resultDiv.className = 'result failed';
+                    resultDiv.innerHTML = `${url}: ${error.message}`;
+                }
+            }
+
+            async function processAllUrls() {
+                while (urls.length > 0) {
+                    const url = urls.shift(); // Get and remove the first URL
+                    textarea.value = urls.join('\n'); // Update the textarea value
+                    await processUrl(url);
+                    await new Promise(resolve => setTimeout(resolve, 800)); // Wait 1 second before processing the next URL
+                }
+            }
+
+            processAllUrls(); // Start processing URLs
+        }
+    </script>
+</body>
+</html>
